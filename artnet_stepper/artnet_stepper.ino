@@ -11,6 +11,8 @@
 #include <Adafruit_SSD1306.h>
 #include <AccelStepper.h>
 #include <ArtnetWifi.h>  // Standard ArtnetWifi library
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
 // Pin Definitions
 #define STP0_STEP 2
@@ -54,8 +56,8 @@ struct MotorControl {
     float acceleration;
 };
 
-MotorControl motor0Control = {false, 0, 0, 1000, 2000};
-MotorControl motor1Control = {false, 0, 0, 1000, 2000};
+MotorControl motor0Control = {false, 0, 0, 1000, 10000};
+MotorControl motor1Control = {false, 0, 0, 1000, 10000};
 
 // System State
 volatile bool motorsEnabled = false;
@@ -68,8 +70,12 @@ bool ethConnected = false;
 // Configuration
 String nodeName = "ArtNet Stepper Controller";
 int startUniverse = 0;
-float stepsPerDegree = 1.8; // 200 steps per revolution = 1.8 steps per degree
+float stepsPerDegree = 4.4;
 bool useManualControl = false;
+
+// Note about microstepping:
+// With 1/8 microstepping: stepsPerDegree = 1.8 * 8 = 14.4
+// With 1/16 microstepping: stepsPerDegree = 1.8 * 16 = 28.8
 
 // Manual Control
 int manual0Position = 0;
@@ -100,51 +106,63 @@ void enableMotors();
 
 // Motor control task - runs on Core 0
 void motorTask(void *pvParameters) {
-    const TickType_t xFrequency = 1; // 1ms tick rate
+    // Configure task for high frequency operation
+    const TickType_t xFrequency = pdMS_TO_TICKS(1); // 1ms minimum for FreeRTOS
     TickType_t xLastWakeTime = xTaskGetTickCount();
+    
+    // For high-speed stepping, we'll do multiple steps per task iteration
+    const int STEPS_PER_ITERATION = 10; // Process up to 10 steps per task run
     
     while (true) {
         portENTER_CRITICAL(&motorMux);
         
         if (motorsEnabled && !estopActive) {
-            // Update motor 0
-            if (motor0Control.isVelocityMode) {
-                stepper0.setSpeed(motor0Control.targetSpeed);
-                stepper0.runSpeed();
-                
-                // Wrap position at ±180°
-                long maxSteps = 180 * stepsPerDegree;
-                if (stepper0.currentPosition() > maxSteps) {
-                    stepper0.setCurrentPosition(stepper0.currentPosition() - 2 * maxSteps);
-                } else if (stepper0.currentPosition() < -maxSteps) {
-                    stepper0.setCurrentPosition(stepper0.currentPosition() + 2 * maxSteps);
+            // Process multiple steps per iteration for motor 0
+            for (int i = 0; i < STEPS_PER_ITERATION; i++) {
+                if (motor0Control.isVelocityMode) {
+                    stepper0.setSpeed(motor0Control.targetSpeed);
+                    if (stepper0.runSpeed()) {
+                        // Wrap position at ±180°
+                        long maxSteps = 180 * stepsPerDegree;
+                        if (stepper0.currentPosition() > maxSteps) {
+                            stepper0.setCurrentPosition(stepper0.currentPosition() - 2 * maxSteps);
+                        } else if (stepper0.currentPosition() < -maxSteps) {
+                            stepper0.setCurrentPosition(stepper0.currentPosition() + 2 * maxSteps);
+                        }
+                    }
+                } else {
+                    stepper0.moveTo(motor0Control.targetPosition);
+                    if (!stepper0.run()) {
+                        break; // No more steps needed
+                    }
                 }
-            } else {
-                stepper0.moveTo(motor0Control.targetPosition);
-                stepper0.run();
             }
             
-            // Update motor 1
-            if (motor1Control.isVelocityMode) {
-                stepper1.setSpeed(motor1Control.targetSpeed);
-                stepper1.runSpeed();
-                
-                // Wrap position at ±180°
-                long maxSteps = 180 * stepsPerDegree;
-                if (stepper1.currentPosition() > maxSteps) {
-                    stepper1.setCurrentPosition(stepper1.currentPosition() - 2 * maxSteps);
-                } else if (stepper1.currentPosition() < -maxSteps) {
-                    stepper1.setCurrentPosition(stepper1.currentPosition() + 2 * maxSteps);
+            // Process multiple steps per iteration for motor 1
+            for (int i = 0; i < STEPS_PER_ITERATION; i++) {
+                if (motor1Control.isVelocityMode) {
+                    stepper1.setSpeed(motor1Control.targetSpeed);
+                    if (stepper1.runSpeed()) {
+                        // Wrap position at ±180°
+                        long maxSteps = 180 * stepsPerDegree;
+                        if (stepper1.currentPosition() > maxSteps) {
+                            stepper1.setCurrentPosition(stepper1.currentPosition() - 2 * maxSteps);
+                        } else if (stepper1.currentPosition() < -maxSteps) {
+                            stepper1.setCurrentPosition(stepper1.currentPosition() + 2 * maxSteps);
+                        }
+                    }
+                } else {
+                    stepper1.moveTo(motor1Control.targetPosition);
+                    if (!stepper1.run()) {
+                        break; // No more steps needed
+                    }
                 }
-            } else {
-                stepper1.moveTo(motor1Control.targetPosition);
-                stepper1.run();
             }
         }
         
         portEXIT_CRITICAL(&motorMux);
         
-        // Maintain consistent timing
+        // Use FreeRTOS delay to prevent watchdog issues
         vTaskDelayUntil(&xLastWakeTime, xFrequency);
     }
 }
@@ -177,13 +195,15 @@ void onDmxFrame(uint16_t universe, uint16_t length, uint8_t sequence, uint8_t* d
         if (motor0Value == 32767) {
             motor0Control.targetSpeed = 0;
         } else {
-            motor0Control.targetSpeed = map(motor0Value, 0, 65535, motor0Control.maxSpeed, -motor0Control.maxSpeed);
+            // Use floating point math for precise speed mapping
+            motor0Control.targetSpeed = ((float)(32767 - motor0Value) / 32767.0) * motor0Control.maxSpeed;
         }
         
         if (motor1Value == 32767) {
             motor1Control.targetSpeed = 0;
         } else {
-            motor1Control.targetSpeed = map(motor1Value, 0, 65535, motor1Control.maxSpeed, -motor1Control.maxSpeed);
+            // Use floating point math for precise speed mapping
+            motor1Control.targetSpeed = ((float)(32767 - motor1Value) / 32767.0) * motor1Control.maxSpeed;
         }
     } else {
         // Position mode: map to degrees then steps
@@ -193,13 +213,13 @@ void onDmxFrame(uint16_t universe, uint16_t length, uint8_t sequence, uint8_t* d
         if (motor0Value == 32767) {
             deg0 = 0;
         } else {
-            deg0 = map(motor0Value, 0, 65535, 180, -180);
+            deg0 = ((float)(32767 - motor0Value) / 32767.0) * 180.0;
         }
         
         if (motor1Value == 32767) {
             deg1 = 0;
         } else {
-            deg1 = map(motor1Value, 0, 65535, 180, -180);
+            deg1 = ((float)(32767 - motor1Value) / 32767.0) * 180.0;
         }
         
         // Calculate target position in steps
@@ -210,23 +230,22 @@ void onDmxFrame(uint16_t universe, uint16_t length, uint8_t sequence, uint8_t* d
         long currentPos0 = stepper0.currentPosition();
         long currentPos1 = stepper1.currentPosition();
         
-        // Normalize current position to ±180° range
-        long maxSteps = 180 * stepsPerDegree;
-        while (currentPos0 > maxSteps) currentPos0 -= 2 * maxSteps;
-        while (currentPos0 < -maxSteps) currentPos0 += 2 * maxSteps;
-        while (currentPos1 > maxSteps) currentPos1 -= 2 * maxSteps;
-        while (currentPos1 < -maxSteps) currentPos1 += 2 * maxSteps;
-        
-        // Calculate shortest path
+        // Calculate the difference without normalizing current position first
         long diff0 = targetSteps0 - currentPos0;
         long diff1 = targetSteps1 - currentPos1;
         
-        // If difference is greater than 180°, go the other way
-        if (diff0 > maxSteps) diff0 -= 2 * maxSteps;
-        if (diff0 < -maxSteps) diff0 += 2 * maxSteps;
-        if (diff1 > maxSteps) diff1 -= 2 * maxSteps;
-        if (diff1 < -maxSteps) diff1 += 2 * maxSteps;
+        // Normalize the difference to find shortest path
+        long fullRotation = 360 * stepsPerDegree;
         
+        // Normalize diff0 to be within -180 to +180 degrees
+        while (diff0 > 180 * stepsPerDegree) diff0 -= fullRotation;
+        while (diff0 < -180 * stepsPerDegree) diff0 += fullRotation;
+        
+        // Normalize diff1 to be within -180 to +180 degrees
+        while (diff1 > 180 * stepsPerDegree) diff1 -= fullRotation;
+        while (diff1 < -180 * stepsPerDegree) diff1 += fullRotation;
+        
+        // Set the target position
         motor0Control.targetPosition = currentPos0 + diff0;
         motor1Control.targetPosition = currentPos1 + diff1;
     }
@@ -456,23 +475,22 @@ void handleManualControl() {
             long currentPos0 = stepper0.currentPosition();
             long currentPos1 = stepper1.currentPosition();
             
-            // Normalize current position to ±180° range
-            long maxSteps = 180 * stepsPerDegree;
-            while (currentPos0 > maxSteps) currentPos0 -= 2 * maxSteps;
-            while (currentPos0 < -maxSteps) currentPos0 += 2 * maxSteps;
-            while (currentPos1 > maxSteps) currentPos1 -= 2 * maxSteps;
-            while (currentPos1 < -maxSteps) currentPos1 += 2 * maxSteps;
-            
-            // Calculate shortest path
+            // Calculate the difference without normalizing current position first
             long diff0 = targetSteps0 - currentPos0;
             long diff1 = targetSteps1 - currentPos1;
             
-            // If difference is greater than 180°, go the other way
-            if (diff0 > maxSteps) diff0 -= 2 * maxSteps;
-            if (diff0 < -maxSteps) diff0 += 2 * maxSteps;
-            if (diff1 > maxSteps) diff1 -= 2 * maxSteps;
-            if (diff1 < -maxSteps) diff1 += 2 * maxSteps;
+            // Normalize the difference to find shortest path
+            long fullRotation = 360 * stepsPerDegree;
             
+            // Normalize diff0 to be within -180 to +180 degrees
+            while (diff0 > 180 * stepsPerDegree) diff0 -= fullRotation;
+            while (diff0 < -180 * stepsPerDegree) diff0 += fullRotation;
+            
+            // Normalize diff1 to be within -180 to +180 degrees
+            while (diff1 > 180 * stepsPerDegree) diff1 -= fullRotation;
+            while (diff1 < -180 * stepsPerDegree) diff1 += fullRotation;
+            
+            // Set the target position
             motor0Control.targetPosition = currentPos0 + diff0;
             motor1Control.targetPosition = currentPos1 + diff1;
             motor0Control.isVelocityMode = false;
@@ -688,8 +706,23 @@ void setup() {
         artnet.begin();
         artnet.setArtDmxCallback(onDmxFrame);
         
+        // Set the ArtNet node name (if supported by your version)
+        // Some versions of ArtnetWifi library have these methods:
+        // artnet.setShortName(nodeName.substring(0, 17).c_str());
+        // artnet.setLongName(nodeName.c_str());
+        
+        // Alternative: If your library version doesn't support setting names,
+        // you may need to modify the library or use a fork that does.
+        // The node will still work but may show as "Art-Net Node" in Resolume
+        
         Serial.print("ArtNet Node started at ");
         Serial.println(ETH.localIP());
+        Serial.print("Node name: ");
+        Serial.println(nodeName);
+        Serial.print("Universe: ");
+        Serial.println(startUniverse);
+        Serial.println("Note: Node name may appear as 'Art-Net Node' in Resolume");
+        Serial.println("if the library doesn't support custom names");
     } else {
         Serial.println("Ethernet not connected");
     }
@@ -708,13 +741,17 @@ void setup() {
         0  // Core 0
     );
     
+    // Note: The ArtnetWifi library handles ArtPoll replies automatically
+    // when artnet.read() is called in the main loop
+    
     Serial.println("Setup complete");
+    Serial.println("ArtNet node will be discoverable in Resolume automatically");
 }
 
 void loop() {
     static unsigned long lastDisplayUpdate = 0;
     
-    // Process ArtNet packets
+    // Process ArtNet packets - this handles ArtPoll replies automatically
     if (ethConnected) {
         artnet.read();
     }
