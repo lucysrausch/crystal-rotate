@@ -601,9 +601,9 @@ void updateDisplay() {
         display.setCursor(0, 18);
         if (artnetConnected) {
             display.print("ArtNet OK");
-            display.print(" U: ")
+            display.print(" U: ");
             display.print(startUniverse);
-            display.print(" Ch: ")
+            display.print(" Ch: ");
             display.print(dmxChannel + 1);
         } else {
             display.print("Manual");
