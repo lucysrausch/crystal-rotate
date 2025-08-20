@@ -168,7 +168,7 @@ void motorTask(void *pvParameters) {
     }
 }
 
-uint16_t valueAtOffsetChannel(uint16_t idx, uint8_t* data, uint16_t length) {
+uint8_t valueAtOffsetChannel(uint16_t idx, uint8_t* data, uint16_t length) {
     uint16_t lookingAt = dmxChannel + idx;
     if (lookingAt >= length) {
         return 0;
@@ -182,9 +182,6 @@ void onDmxFrame(uint16_t universe, uint16_t length, uint8_t sequence, uint8_t* d
     
     lastArtnetPacket = millis();
     artnetConnected = true;
-    
-    // // Ensure we have at least 6 bytes
-    if (length < 6) return;
     
     // Parse ArtNet data
     uint16_t motor0Value = (valueAtOffsetChannel(0, data, length) << 8) | valueAtOffsetChannel(1, data, length);
@@ -601,6 +598,10 @@ void updateDisplay() {
         display.setCursor(0, 18);
         if (artnetConnected) {
             display.print("ArtNet OK");
+            display.print(" U: ")
+            display.print(startUniverse);
+            display.print(" Ch: ")
+            display.print(dmxChannel);
         } else {
             display.print("Manual");
         }
