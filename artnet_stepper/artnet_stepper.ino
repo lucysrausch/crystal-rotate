@@ -68,7 +68,7 @@ const unsigned long ARTNET_TIMEOUT = 5000; // 5 seconds timeout
 bool ethConnected = false;
 
 // Configuration
-String nodeName = "ArtNet Stepper Controller";
+String nodeName = "ArtNet OtterStep Controller";
 int startUniverse = 0;
 int dmxChannel = 0;
 float stepsPerDegree = 4.4;
@@ -182,6 +182,9 @@ void onDmxFrame(uint16_t universe, uint16_t length, uint8_t sequence, uint8_t* d
     
     lastArtnetPacket = millis();
     artnetConnected = true;
+
+    // Ignore invalid packets
+    if ((length - dmxChannel) < 6) return;
     
     // Parse ArtNet data
     uint16_t motor0Value = (valueAtOffsetChannel(0, data, length) << 8) | valueAtOffsetChannel(1, data, length);
@@ -371,7 +374,7 @@ void handleRoot() {
     html += "<label>ArtNet Universe:</label>";
     html += "<input type='number' name='universe' value='" + String(startUniverse) + "'>";
     html += "<label>DMX Channel:</label>";
-    html += "<input type='number' name='dmxChannel' value='" + String(dmxChannel) + "'>";
+    html += "<input type='number' name='dmxChannel' value='" + String(dmxChannel + 1) + "'>";
     html += "<label>Motor 0 Max Speed (steps/sec):</label>";
     html += "<input type='number' name='m0speed' value='" + String(motor0Control.maxSpeed) + "'>";
     html += "<label>Motor 0 Acceleration (steps/sec²):</label>";
@@ -435,7 +438,7 @@ void handleConfig() {
     if (server.method() == HTTP_POST) {
         nodeName = server.arg("nodename");
         startUniverse = server.arg("universe").toInt();
-        dmxChannel = server.arg("dmxChannel").toInt();
+        dmxChannel = server.arg("dmxChannel").toInt() - 1;
         motor0Control.maxSpeed = server.arg("m0speed").toFloat();
         motor0Control.acceleration = server.arg("m0accel").toFloat();
         motor1Control.maxSpeed = server.arg("m1speed").toFloat();
@@ -601,7 +604,7 @@ void updateDisplay() {
             display.print(" U: ")
             display.print(startUniverse);
             display.print(" Ch: ")
-            display.print(dmxChannel);
+            display.print(dmxChannel + 1);
         } else {
             display.print("Manual");
         }
@@ -737,7 +740,7 @@ void setup() {
         Serial.print("Universe: ");
         Serial.println(startUniverse);
         Serial.print("Channel: ");
-        Serial.println(dmxChannel);
+        Serial.println(dmxChannel + 1);
         Serial.println("Note: Node name may appear as 'Art-Net Node' in Resolume");
         Serial.println("if the library doesn't support custom names");
     } else {
