@@ -169,10 +169,11 @@ void motorTask(void *pvParameters) {
 }
 
 uint16_t valueAtOffsetChannel(uint16_t idx, uint8_t* data, uint16_t length) {
-    if idx >= length {
+    uint16_t lookingAt = dmxChannel + idx;
+    if (lookingAt >= length) {
         return 0;
     }
-    return data[dmxChannel + idx];
+    return data[lookingAt];
 }
 
 // ArtNet DMX callback
