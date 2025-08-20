@@ -70,6 +70,7 @@ bool ethConnected = false;
 // Configuration
 String nodeName = "ArtNet Stepper Controller";
 int startUniverse = 0;
+int dmxChannel = 0;
 float stepsPerDegree = 4.4;
 bool useManualControl = false;
 
@@ -167,6 +168,13 @@ void motorTask(void *pvParameters) {
     }
 }
 
+uint16_t valueAtOffsetChannel(uint16_t idx, uint8_t* data, uint16_t length) {
+    if idx >= length {
+        return 0;
+    }
+    return data[dmxChannel + idx];
+}
+
 // ArtNet DMX callback
 void onDmxFrame(uint16_t universe, uint16_t length, uint8_t sequence, uint8_t* data) {
     if (universe != startUniverse) return;
@@ -174,14 +182,14 @@ void onDmxFrame(uint16_t universe, uint16_t length, uint8_t sequence, uint8_t* d
     lastArtnetPacket = millis();
     artnetConnected = true;
     
-    // Ensure we have at least 6 bytes
+    // // Ensure we have at least 6 bytes
     if (length < 6) return;
     
     // Parse ArtNet data
-    uint16_t motor0Value = (data[0] << 8) | data[1];
-    uint16_t motor1Value = (data[2] << 8) | data[3];
-    bool velocityMode = data[4] > 127;
-    bool enableMotorsCmd = data[5] > 127;
+    uint16_t motor0Value = (valueAtOffsetChannel(0, data, length) << 8) | valueAtOffsetChannel(1, data, length);
+    uint16_t motor1Value = (valueAtOffsetChannel(2, data, length) << 8) | valueAtOffsetChannel(3, data, length);
+    bool velocityMode = valueAtOffsetChannel(4, data, length) > 127;
+    bool enableMotorsCmd = valueAtOffsetChannel(5, data, length) > 127;
     
     portENTER_CRITICAL(&motorMux);
     
@@ -362,8 +370,10 @@ void handleRoot() {
     html += "<form action='/config' method='POST'>";
     html += "<label>Node Name:</label>";
     html += "<input type='text' name='nodename' value='" + nodeName + "'>";
-    html += "<label>Start Universe:</label>";
+    html += "<label>ArtNet Universe:</label>";
     html += "<input type='number' name='universe' value='" + String(startUniverse) + "'>";
+    html += "<label>DMX Channel:</label>";
+    html += "<input type='number' name='dmxChannel' value='" + String(dmxChannel) + "'>";
     html += "<label>Motor 0 Max Speed (steps/sec):</label>";
     html += "<input type='number' name='m0speed' value='" + String(motor0Control.maxSpeed) + "'>";
     html += "<label>Motor 0 Acceleration (steps/sec²):</label>";
@@ -427,6 +437,7 @@ void handleConfig() {
     if (server.method() == HTTP_POST) {
         nodeName = server.arg("nodename");
         startUniverse = server.arg("universe").toInt();
+        dmxChannel = server.arg("dmxChannel").toInt();
         motor0Control.maxSpeed = server.arg("m0speed").toFloat();
         motor0Control.acceleration = server.arg("m0accel").toFloat();
         motor1Control.maxSpeed = server.arg("m1speed").toFloat();
@@ -443,6 +454,7 @@ void handleConfig() {
         preferences.begin("stepper_config", false);
         preferences.putString("nodename", nodeName);
         preferences.putInt("universe", startUniverse);
+        preferences.putInt("dmxChannel", dmxChannel);
         preferences.putFloat("m0speed", motor0Control.maxSpeed);
         preferences.putFloat("m0accel", motor0Control.acceleration);
         preferences.putFloat("m1speed", motor1Control.maxSpeed);
@@ -679,6 +691,7 @@ void setup() {
     preferences.begin("stepper_config", true);
     nodeName = preferences.getString("nodename", nodeName);
     startUniverse = preferences.getInt("universe", startUniverse);
+    dmxChannel = preferences.getInt("dmxChannel", dmxChannel);
     motor0Control.maxSpeed = preferences.getFloat("m0speed", motor0Control.maxSpeed);
     motor0Control.acceleration = preferences.getFloat("m0accel", motor0Control.acceleration);
     motor1Control.maxSpeed = preferences.getFloat("m1speed", motor1Control.maxSpeed);
@@ -721,6 +734,8 @@ void setup() {
         Serial.println(nodeName);
         Serial.print("Universe: ");
         Serial.println(startUniverse);
+        Serial.print("Channel: ");
+        Serial.println(dmxChannel);
         Serial.println("Note: Node name may appear as 'Art-Net Node' in Resolume");
         Serial.println("if the library doesn't support custom names");
     } else {
